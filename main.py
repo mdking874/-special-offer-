@@ -4,10 +4,11 @@ import os
 import asyncio
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
-import pymongo 
+import pymongo
+import certifi # SSL ফিক্স করার জন্য
 
 # ==========================================
-# 👇 কনফিগারেশন (আপনার তথ্য দিন)
+# 👇 কনফিগারেশন (আপনার তথ্য)
 # ==========================================
 TOKEN = "8501755839:AAEzVcXuPmlPB56MpqSehkhbxzPKi9HByR8"
 ADMIN_IDS = [1933498659, 6451711574, 7707686630]
@@ -15,20 +16,25 @@ CHANNEL_USERNAME = "@rsghd33"
 CHANNEL_LINK = "https://t.me/rsghd33"
 BOT_USERNAME = "raisa_mal_bot"
 
-# 👇 আপনার দেওয়া MongoDB লিংক (আমি বসিয়ে দিয়েছি) ✅
+# 👇 আপনার MongoDB লিংক
 MONGO_URL = "mongodb+srv://rapem9312:Mdrafiking123@cluster0.e27uvmy.mongodb.net/?appName=Cluster0"
 
 # ==========================================
-# 🔥 ডাটাবেস কানেকশন
+# 🔥 ডাটাবেস কানেকশন (SSL Error Fixed) 🛠️
 # ==========================================
 mongo_active = False
 try:
-    client = pymongo.MongoClient(MONGO_URL)
+    # 👇 এই লাইনটি পরিবর্তন করা হয়েছে SSL এরর ফিক্স করার জন্য
+    client = pymongo.MongoClient(MONGO_URL, tls=True, tlsAllowInvalidCertificates=True)
+    
     db = client["TelegramBotDB"]
     users_col = db["users"]
     groups_col = db["groups"]
     videos_col = db["videos"] 
     history_col = db["history"]
+    
+    # কানেকশন টেস্ট
+    client.admin.command('ping')
     mongo_active = True
     print("✅ Database Connected Successfully!")
 except Exception as e:
@@ -37,7 +43,7 @@ except Exception as e:
 # এডমিনদের আপলোড মোড
 ADMIN_UPLOAD_MODE = {}
 
-# অটো মেসেজ (গ্রুপের জন্য)
+# অটো মেসেজ
 BOT_START_LINK = f"https://t.me/{BOT_USERNAME}?start=hot_video"
 AUTO_MESSAGES = [
     "🔥 **ভাইরাল ভিডিও!** 😱\nদেখার জন্য নিচে ক্লিক করুন 👇\n👉 " + BOT_START_LINK,
