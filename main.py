@@ -2,53 +2,87 @@ import logging
 import random
 import os
 import json
+import asyncio
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, ChatMemberHandler
+import pymongo 
 
 # ==========================================
 # 👇 কনফিগারেশন
 # ==========================================
-TOKEN = "8501755839:AAEzVcXuPmlPB56MpqSehkhbxzPKi9HByR8" 
-ADMIN_IDS = [1933498659, 6451711574, 7707686630] 
+TOKEN = "8501755839:AAEzVcXuPmlPB56MpqSehkhbxzPKi9HByR8"
+ADMIN_IDS = [1933498659, 6451711574, 7707686630]
 CHANNEL_USERNAME = "@rsghd33"
 CHANNEL_LINK = "https://t.me/rsghd33"
-BOT_USERNAME = "raisa_mal_bot" # আপনার বোটের ইউজারনেম
+BOT_USERNAME = "raisa_mal_bot"
+
+# 👇 MongoDB লিংক (অপশনাল, তবে ব্যাকআপের জন্য ভালো)
+MONGO_URL = "আপনার_মঙ্গোডিবি_লিংক_এখানে_দিন"
 
 # ==========================================
-# 🔥 ফাইল এবং ডাটাবেস
+# 🔥🔥🔥 ভিডিও রাখার স্থায়ী জায়গা (কোডিং এর ভেতর) 🔥🔥🔥
+# আপনি টেলিগ্রামে ভিডিও আপলোড করলে বোট যে আইডি দিবে, সেটা কপি করে এখানে বসাবেন।
 # ==========================================
-DB_FILE = "video_database.json" 
-USER_DB_FILE = "users_db.json"
-GROUP_DB_FILE = "groups_db.json"
-HISTORY_FILE = "history.json"
+PERMANENT_VIDEOS = {
+    "BD HOT": [
+        "এখানে_আপনার_ভিডিও_আইডি_বসাতে_পারেন_1",
+        "এখানে_আপনার_ভিডিও_আইডি_বসাতে_পারেন_2",
+    ],
+    "US HOT": [
+        "us_video_id_1",
+    ],
+    "RI HOT": [
+        "ri_video_id_1",
+    ]
+}
+# ==========================================
 
+# MongoDB কানেকশন (যদি লিংক থাকে তবেই কানেক্ট হবে, নাহলে এরর দিবে না)
+try:
+    client = pymongo.MongoClient(MONGO_URL)
+    db = client["TelegramBotDB"]
+    users_col = db["users"]
+    groups_col = db["groups"]
+    videos_col = db["videos"] # এক্সট্রা ব্যাকআপ
+    history_col = db["history"]
+    mongo_active = True
+except:
+    mongo_active = False # মঙ্গোডিবি না থাকলে শুধু কোডিং এর ভিডিও চলবে
+
+# অটো মেসেজ
+BOT_START_LINK = f"https://t.me/{BOT_USERNAME}?start=hot_video"
 AUTO_MESSAGES = [
-    "🔥 **ভাইরাল ভিডিও!** 😱\nদেখার জন্য নিচে ক্লিক করুন 👇\nhttps://t.me/" + BOT_USERNAME + "?start=hot_video",
-    "🔞 **উফফ! কি দেখলাম।** 🥵\nহেডফোন লাগিয়ে দেখুন 👇\nhttps://t.me/" + BOT_USERNAME + "?start=hot_video",
-    "💋 **কলেজের ভিডিও লিক!** 🙈\nমিস করবেন না 👇\nhttps://t.me/" + BOT_USERNAME + "?start=hot_video"
+    "🔥 **ভাইরাল ভিডিও!** 😱\nদেখার জন্য নিচে ক্লিক করুন 👇\n👉 " + BOT_START_LINK,
+    "🔞 **উফফ! কি দেখলাম।** 🥵\nহেডফোন লাগিয়ে দেখুন 👇\n👉 " + BOT_START_LINK,
+    "💋 **কলেজের ভিডিও লিক!** 🙈\nমিস করবেন না 👇\n👉 " + BOT_START_LINK
 ]
 
-# ডাটা লোড/সেভ ফাংশন
-def load_data(filename):
-    if not os.path.exists(filename): return {} if filename in [DB_FILE, HISTORY_FILE] else []
-    try:
-        with open(filename, 'r') as f: return json.load(f)
-    except: return {} if filename in [DB_FILE, HISTORY_FILE] else []
+# ==========================================
+# 👇 ফাংশনসমূহ
+# ==========================================
 
-def save_data(filename, data):
-    with open(filename, 'w') as f: json.dump(data, f, indent=4)
+# সব ভিডিও একত্রে করা (কোডিং + ডাটাবেস)
+def get_all_videos(folder):
+    # ১. কোড থেকে ভিডিও নেওয়া
+    code_vids = PERMANENT_VIDEOS.get(folder, [])
+    
+    # ২. ডাটাবেস থেকে ভিডিও নেওয়া (যদি থাকে)
+    mongo_vids = []
+    if mongo_active:
+        vids = videos_col.find({"folder": folder})
+        mongo_vids = [v["file_id"] for v in vids]
+    
+    # ৩. দুইটা মিক্স করা (ডুপ্লিকেট বাদ দিয়ে)
+    return list(set(code_vids + mongo_vids))
 
+# ইউজার ও গ্রুপ সেভ (MongoDB তে)
 def add_user(user_id):
-    users = load_data(USER_DB_FILE)
-    if user_id not in users:
-        users.append(user_id)
-        save_data(USER_DB_FILE, users)
+    if mongo_active and not users_col.find_one({"_id": user_id}):
+        users_col.insert_one({"_id": user_id})
 
 def add_group(chat_id):
-    groups = load_data(GROUP_DB_FILE)
-    if chat_id not in groups:
-        groups.append(chat_id)
-        save_data(GROUP_DB_FILE, groups)
+    if mongo_active and not groups_col.find_one({"_id": chat_id}):
+        groups_col.insert_one({"_id": chat_id})
 
 # মেম্বারশিপ চেক
 async def check_membership(user_id, context):
@@ -59,12 +93,14 @@ async def check_membership(user_id, context):
         return True
     except: return True 
 
+# ==========================================
 # ১. স্টার্ট কমান্ড
+# ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_type = update.effective_chat.type
 
-    # মেনু বাটন
+    # মেনু
     menu_buttons = [
         [KeyboardButton("🔥 BD HOT"), KeyboardButton("🇺🇸 US HOT")],
         [KeyboardButton("🌶️ RI HOT"), KeyboardButton("📢 MY OFFICIAL CHANNEL")],
@@ -80,8 +116,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_user(user_id)
     
     if user_id in ADMIN_IDS:
-        buttons = [[KeyboardButton("📊 Stats"), KeyboardButton("📢 Broadcast Users")], [KeyboardButton("📢 Broadcast Groups")]]
-        await update.message.reply_text(f"👑 **Admin Panel**", reply_markup=ReplyKeyboardMarkup(buttons, resize_keyboard=True))
+        buttons = [[KeyboardButton("📊 Stats"), KeyboardButton("📢 Broadcast")]]
+        await update.message.reply_text(f"👑 **Admin Panel**\nভিডিও আপলোড করলে কোড জেনারেট হবে।", reply_markup=ReplyKeyboardMarkup(buttons, resize_keyboard=True))
         return
 
     if not await check_membership(user_id, context):
@@ -98,50 +134,55 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ২. অটো পোস্ট
 async def send_auto_group_messages(context: ContextTypes.DEFAULT_TYPE):
-    groups = load_data(GROUP_DB_FILE)
-    if not groups: return
+    if not mongo_active: return
+    all_groups = groups_col.find({})
     msg = random.choice(AUTO_MESSAGES)
-    for chat_id in groups:
-        try: await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='Markdown')
+    for grp in all_groups:
+        try: await context.bot.send_message(chat_id=grp["_id"], text=msg, parse_mode='Markdown')
         except: pass
 
 # ৩. মেসেজ হ্যান্ডলার
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type in ['group', 'supergroup']: add_group(update.effective_chat.id)
+    chat_type = update.effective_chat.type
+    if chat_type in ['group', 'supergroup']: add_group(update.effective_chat.id)
+    
     text = update.message.text
     user_id = update.effective_user.id
     
-    # ভিডিও সেভ
+    # 🔥 ভিডিও আপলোড এবং কোড জেনারেশন 🔥
     if update.message.reply_to_message and update.message.reply_to_message.video:
         if user_id not in ADMIN_IDS: return 
-        vid_id = update.message.reply_to_message.video.file_id
+        video_id = update.message.reply_to_message.video.file_id
         folder = text.strip().upper()
-        if folder in ["BD HOT", "US HOT", "RI HOT"]:
-            db = load_data(DB_FILE)
-            if folder not in db: db[folder] = []
-            if vid_id not in db[folder]:
-                db[folder].append(vid_id)
-                save_data(DB_FILE, db)
-                await update.message.reply_text(f"✅ Saved to {folder}!")
-            else: await update.message.reply_text("⚠️ Already exists.")
+        
+        valid_folders = ["BD HOT", "US HOT", "RI HOT"]
+        if folder in valid_folders:
+            # ১. মঙ্গোডিবিতে সেভ (তাৎক্ষণিক ব্যবহারের জন্য)
+            if mongo_active:
+                if not videos_col.find_one({"folder": folder, "file_id": video_id}):
+                    videos_col.insert_one({"folder": folder, "file_id": video_id})
+            
+            # ২. কোড জেনারেট করে দেওয়া (পার্মানেন্ট করার জন্য)
+            code_line = f'"{video_id}",'
+            
+            await update.message.reply_text(
+                f"✅ **ভিডিওটি সাময়িকভাবে সেভ হয়েছে!**\n\nতবে এটাকে **স্থায়ীভাবে কোডিং-এ রাখতে** হলে নিচের লাইনটি কপি করে GitHub এর `PERMANENT_VIDEOS` এর `{folder}` লিস্টে বসান:\n\n`{code_line}`",
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text("❌ ফোল্ডার নাম ভুল! লিখুন: `BD HOT`, `US HOT`, `RI HOT`")
         return
 
-    # এডমিন কমান্ড
-    if user_id in ADMIN_IDS and update.effective_chat.type == 'private':
-        if text == "📊 Stats":
-            u = len(load_data(USER_DB_FILE))
-            g = len(load_data(GROUP_DB_FILE))
-            v = sum(len(x) for x in load_data(DB_FILE).values())
-            await update.message.reply_text(f"Users: {u} | Groups: {g} | Videos: {v}")
-            return
-        elif text == "📢 Broadcast Users":
-            await update.message.reply_text("Use: `/broadcast_users msg`")
-            return
-        elif text == "📢 Broadcast Groups":
-            await update.message.reply_text("Use: `/broadcast_groups msg`")
-            return
+    # এডমিন স্ট্যাটস
+    if user_id in ADMIN_IDS and text == "📊 Stats":
+        msg = "📊 **ভিডিও স্ট্যাটাস:**\n"
+        for f in ["BD HOT", "US HOT", "RI HOT"]:
+            count = len(get_all_videos(f))
+            msg += f"{f}: {count} টি\n"
+        await update.message.reply_text(msg)
+        return
 
-    # বাটন ও ভিডিও
+    # বাটন লজিক
     if text == "➕ Add Me To Your Group ➕":
         url = f"https://t.me/{context.bot.username}?startgroup=true"
         await update.message.reply_text("👇 গ্রুপে অ্যাড করুন:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Add", url=url)]]))
@@ -151,56 +192,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Join: {CHANNEL_LINK}")
         return
 
+    # ভিডিও পাঠানো
     folder_map = {"🔥 BD HOT": "BD HOT", "🇺🇸 US HOT": "US HOT", "🌶️ RI HOT": "RI HOT"}
     if text in folder_map:
         if not await check_membership(user_id, context):
             await update.message.reply_text("⚠️ **লক করা!** আগে জয়েন করুন।", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Join 🔞", url=CHANNEL_LINK)]]))
             return
+        
         folder = folder_map[text]
-        vids = load_data(DB_FILE).get(folder, [])
-        if not vids:
+        all_vids = get_all_videos(folder)
+        
+        if not all_vids:
             await update.message.reply_text("❌ ভিডিও নেই।")
             return
         
-        hist = load_data(HISTORY_FILE)
-        user_h = hist.get(str(user_id), {}).get(folder, [])
-        avail = [v for v in vids if v not in user_h]
-        if not avail: 
-            user_h = []
-            avail = vids
+        # নো-রিপিট লজিক (হিস্ট্রি চেক)
+        seen_vids = []
+        if mongo_active:
+            data = history_col.find_one({"_id": user_id})
+            if data and folder in data: seen_vids = data[folder]
+
+        available = [v for v in all_vids if v not in seen_vids]
+        if not available:
+            seen_vids = [] # রিসেট
+            available = all_vids
+            if mongo_active: history_col.update_one({"_id": user_id}, {"$set": {folder: []}})
         
-        vid = random.choice(avail)
+        vid = random.choice(available)
         try:
             await context.bot.send_video(chat_id=update.effective_chat.id, video=vid, caption=f"Join: {CHANNEL_USERNAME}")
-            user_h.append(vid)
-            if str(user_id) not in hist: hist[str(user_id)] = {}
-            hist[str(user_id)][folder] = user_h
-            save_data(HISTORY_FILE, hist)
+            if mongo_active:
+                history_col.update_one({"_id": user_id}, {"$push": {folder: vid}}, upsert=True)
         except: await update.message.reply_text("Error loading video.")
         return
-
-# ব্রডকাস্ট
-async def b_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS: return
-    msg = " ".join(context.args)
-    if msg:
-        users = load_data(USER_DB_FILE)
-        await update.message.reply_text(f"Sending to {len(users)} users...")
-        for u in users:
-            try: await context.bot.send_message(u, msg)
-            except: pass
-        await update.message.reply_text("Done.")
-
-async def b_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS: return
-    msg = " ".join(context.args)
-    if msg:
-        groups = load_data(GROUP_DB_FILE)
-        await update.message.reply_text(f"Sending to {len(groups)} groups...")
-        for g in groups:
-            try: await context.bot.send_message(g, msg)
-            except: pass
-        await update.message.reply_text("Done.")
 
 async def video_reply_guide(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in ADMIN_IDS and update.effective_chat.type == 'private':
@@ -210,9 +234,7 @@ if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
     app.job_queue.run_repeating(send_auto_group_messages, interval=14400, first=10)
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("broadcast_users", b_users))
-    app.add_handler(CommandHandler("broadcast_groups", b_groups))
     app.add_handler(MessageHandler(filters.VIDEO, video_reply_guide))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    print("🔥 BOT STARTED ON GSM HOST 🔥")
+    print("🔥 HYBRID BOT STARTED 🔥")
     app.run_polling()
