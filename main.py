@@ -10,7 +10,7 @@ import certifi # SSL ফিক্স করার জন্য
 # ==========================================
 # 👇 কনফিগারেশন (আপনার তথ্য)
 # ==========================================
-TOKEN = "8501755839:AAEzVcXuPmlPB56MpqSehkhbxzPKi9HByR8"
+TOKEN = "8508230875:AAGEldhmFI56fkrc_O_op-epuf9gdTaezvg"
 ADMIN_IDS = [1933498659, 6451711574, 7707686630]
 CHANNEL_USERNAME = "@rsghd33"
 CHANNEL_LINK = "https://t.me/rsghd33"
