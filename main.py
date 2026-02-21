@@ -1,281 +1,187 @@
-import logging
+import telebot
+import requests
+from bs4 import BeautifulSoup
 import random
+import json
+import time
 import os
-import asyncio
-from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
-import pymongo
-import certifi # SSL ফিক্স করার জন্য
+import re 
+from datetime import datetime, timedelta
 
-# ==========================================
-# 👇 কনফিগারেশন (আপনার তথ্য)
-# ==========================================
-TOKEN = "8508230875:AAGEldhmFI56fkrc_O_op-epuf9gdTaezvg"
-ADMIN_IDS = [1933498659, 6451711574, 7707686630]
-CHANNEL_USERNAME = "@rsghd33"
-CHANNEL_LINK = "https://t.me/rsghd33"
-BOT_USERNAME = "raisa_mal_bot"
+# ---------------------------------------------------------
+# ১. কনফিগারেশন
+BOT_TOKEN = "8195990732:AAGdnFVAbqlOiSIELOWHk7ArS1gm80AFDLY"
+ADMIN_ID = 123456789  # আপনার Numerical ID দিন
 
-# 👇 আপনার MongoDB লিংক
-MONGO_URL = "mongodb+srv://rapem9312:Mdrafiking123@cluster0.e27uvmy.mongodb.net/?appName=Cluster0"
-
-# ==========================================
-# 🔥 ডাটাবেস কানেকশন (SSL Error Fixed) 🛠️
-# ==========================================
-mongo_active = False
-try:
-    # 👇 এই লাইনটি পরিবর্তন করা হয়েছে SSL এরর ফিক্স করার জন্য
-    client = pymongo.MongoClient(MONGO_URL, tls=True, tlsAllowInvalidCertificates=True)
-    
-    db = client["TelegramBotDB"]
-    users_col = db["users"]
-    groups_col = db["groups"]
-    videos_col = db["videos"] 
-    history_col = db["history"]
-    
-    # কানেকশন টেস্ট
-    client.admin.command('ping')
-    mongo_active = True
-    print("✅ Database Connected Successfully!")
-except Exception as e:
-    print(f"❌ Database Connection Failed: {e}")
-
-# এডমিনদের আপলোড মোড
-ADMIN_UPLOAD_MODE = {}
-
-# অটো মেসেজ
-BOT_START_LINK = f"https://t.me/{BOT_USERNAME}?start=hot_video"
-AUTO_MESSAGES = [
-    "🔥 **ভাইরাল ভিডিও!** 😱\nদেখার জন্য নিচে ক্লিক করুন 👇\n👉 " + BOT_START_LINK,
-    "🔞 **উফফ! কি দেখলাম।** 🥵\nহেডফোন লাগিয়ে দেখুন 👇\n👉 " + BOT_START_LINK,
-    "💋 **কলেজের ভিডিও লিক!** 🙈\nমিস করবেন না 👇\n👉 " + BOT_START_LINK
+# ২. ভিডিও সাইট লিস্ট
+REGULAR_SITES = [
+    "https://fry99.cc/latest-videos/",
+    "https://desibf.com/tag/desi-49/",
+    "https://www.desitales2.com/videos/tag/desi49/",
+    "https://www.desitales2.com/videos/category/bangla-sex/"
 ]
+LIVE_SITES = ["https://desibf.com/live/", "https://www.desitales2.com/live-cams/"]
 
-# ==========================================
-# 👇 ফাংশনসমূহ
-# ==========================================
+# ৩. ক্লিন প্লেয়ার বেস ইউআরএল
+CLEAN_PLAYER_URL = "https://hlsjs.video-dev.org/demo/?src="
+# ---------------------------------------------------------
 
-def add_user(user_id):
-    if mongo_active and not users_col.find_one({"_id": user_id}):
-        users_col.insert_one({"_id": user_id})
+bot = telebot.TeleBot(BOT_TOKEN)
 
-def add_group(chat_id):
-    if mongo_active and not groups_col.find_one({"_id": chat_id}):
-        groups_col.insert_one({"_id": chat_id})
+# ফাইল ডাটাবেস
+USER_DATA_FILE = "users_db.json"
+KEYS_FILE = "keys_db.json"
+DEFAULT_THUMB = "https://cdn-icons-png.flaticon.com/512/12560/12560376.png"
 
-# 🔥 ভিডিও অটো সেভ ফাংশন 🔥
-def auto_save_video(folder, file_id):
-    if not mongo_active: return False
-    if not videos_col.find_one({"folder": folder, "file_id": file_id}):
-        videos_col.insert_one({"folder": folder, "file_id": file_id})
-        return True
-    return False
-
-def get_videos(folder):
-    if not mongo_active: return []
-    vids = videos_col.find({"folder": folder})
-    return [v["file_id"] for v in vids]
-
-async def check_membership(user_id, context):
-    if user_id in ADMIN_IDS: return True
+def load_db(file):
+    if not os.path.exists(file): return {}
     try:
-        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-        if member.status in ['left', 'kicked', 'banned']: return False
-        return True
-    except: return True 
+        with open(file, "r") as f: return json.load(f)
+    except: return {}
 
-# ==========================================
-# ১. স্টার্ট কমান্ড
-# ==========================================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    chat_type = update.effective_chat.type
+def save_db(file, data):
+    with open(file, "w") as f: json.dump(data, f, indent=4)
 
-    # গ্রুপ মেনু
-    if chat_type in ['group', 'supergroup']:
-        add_group(update.effective_chat.id)
-        menu_buttons = [
-            [KeyboardButton("🔥 BD HOT"), KeyboardButton("🇺🇸 US HOT")],
-            [KeyboardButton("🌶️ RI HOT"), KeyboardButton("📢 MY OFFICIAL CHANNEL")],
-            [KeyboardButton("➕ Add Me To Your Group ➕")]
-        ]
-        await update.message.reply_text("🔥 **Menu Loaded!** 🔥", reply_markup=ReplyKeyboardMarkup(menu_buttons, resize_keyboard=True))
-        return
+def is_subscribed(user_id):
+    users = load_db(USER_DATA_FILE)
+    uid = str(user_id)
+    if uid in users:
+        expiry = datetime.strptime(users[uid], "%Y-%m-%d %H:%M:%S")
+        if expiry > datetime.now(): return True, users[uid]
+    return False, None
 
-    add_user(user_id)
-    
-    # এডমিন প্যানেল
-    if user_id in ADMIN_IDS:
-        if user_id in ADMIN_UPLOAD_MODE: del ADMIN_UPLOAD_MODE[user_id]
-        buttons = [
-            [KeyboardButton("📤 Start Auto Upload"), KeyboardButton("📊 Database Stats")],
-            [KeyboardButton("👥 User Mode"), KeyboardButton("📢 Broadcast")]
-        ]
-        status = "✅ Connected" if mongo_active else "❌ Not Connected"
-        await update.message.reply_text(
-            f"👑 **Admin Panel**\nDB Status: {status}\nভিডিও আপলোড করতে **'Start Auto Upload'** এ ক্লিক করুন।",
-            reply_markup=ReplyKeyboardMarkup(buttons, resize_keyboard=True)
-        )
-        return
-
-    # সাধারণ ইউজার
-    if not await check_membership(user_id, context):
-        join_btn = [[InlineKeyboardButton("🔞 JOIN TO WATCH 🔞", url=CHANNEL_LINK)]]
-        await update.message.reply_text("⚠️ **ভিডিও লক করা!** আগে জয়েন করুন। 👇", reply_markup=InlineKeyboardMarkup(join_btn))
-        return
-
-    welcome_text = "🔥 **আগুন সব ভিডিওর ভান্ডারে স্বাগতম!** 🔥\n🚀 **দেরি না করে এখনই আমাকে আপনার গ্রুপে অ্যাড করুন!** 👇"
-    add_link = f"https://t.me/{context.bot.username}?startgroup=true"
-    inline_btn = [[InlineKeyboardButton("➕ Add Me To Your Group ➕", url=add_link)], [InlineKeyboardButton("Join Channel 🚀", url=CHANNEL_LINK)]]
-    
-    menu_buttons = [
-        [KeyboardButton("🔥 BD HOT"), KeyboardButton("🇺🇸 US HOT")],
-        [KeyboardButton("🌶️ RI HOT"), KeyboardButton("📢 MY OFFICIAL CHANNEL")],
-        [KeyboardButton("➕ Add Me To Your Group ➕")]
-    ]
-    
-    await update.message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(inline_btn))
-    await update.message.reply_text("অথবা ক্যাটাগরি বেছে নিন: 👇", reply_markup=ReplyKeyboardMarkup(menu_buttons, resize_keyboard=True))
-
-# ==========================================
-# ২. অটো পোস্ট (গ্রুপে)
-# ==========================================
-async def send_auto_group_messages(context: ContextTypes.DEFAULT_TYPE):
-    if not mongo_active: return
-    groups = groups_col.find({})
-    msg = random.choice(AUTO_MESSAGES)
-    count = 0
-    for grp in groups:
-        try:
-            await context.bot.send_message(chat_id=grp["_id"], text=msg, parse_mode='Markdown')
-            count += 1
-        except: pass
-    print(f"Auto-posted to {count} groups.")
-
-# ==========================================
-# ৩. মেইন লজিক (ভিডিও আপলোড + দেখা)
-# ==========================================
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    user_id = update.effective_user.id
-    
-    # 🔥🔥🔥 অটোমেটিক ভিডিও সেভ 🔥🔥🔥
-    if update.message.video or (update.message.reply_to_message and update.message.reply_to_message.video):
-        if user_id not in ADMIN_IDS: return 
+# --- অ্যাডভান্সড লিংক এক্সট্র্যাক্টর ---
+def get_clean_stream(page_url):
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        response = requests.get(page_url, headers=headers, timeout=10)
+        html = response.text
         
-        video_id = update.message.video.file_id if update.message.video else update.message.reply_to_message.video.file_id
-        
-        if user_id in ADMIN_UPLOAD_MODE:
-            folder = ADMIN_UPLOAD_MODE[user_id]
-            if auto_save_video(folder, video_id):
-                await update.message.reply_text(f"✅ Saved to **{folder}**", quote=True, parse_mode='Markdown')
-            else:
-                await update.message.reply_text(f"⚠️ Already in **{folder}**", quote=True, parse_mode='Markdown')
-        else:
-            await update.message.reply_text("⚠️ **ফোল্ডার সেট করা নেই!**\nএডমিন প্যানেল থেকে 'Start Auto Upload' এ ক্লিক করুন।")
-        return
-
-    # --- এডমিন বাটন ---
-    if user_id in ADMIN_IDS:
-        if text == "📤 Start Auto Upload":
-            buttons = [
-                [KeyboardButton("SET: BD HOT"), KeyboardButton("SET: US HOT")],
-                [KeyboardButton("SET: RI HOT"), KeyboardButton("❌ Stop Uploading")]
-            ]
-            await update.message.reply_text("📂 **কোন ফোল্ডারে সেভ করবেন?**", reply_markup=ReplyKeyboardMarkup(buttons, resize_keyboard=True))
-            return
-        
-        elif text and text.startswith("SET: "):
-            folder = text.replace("SET: ", "")
-            ADMIN_UPLOAD_MODE[user_id] = folder
-            await update.message.reply_text(f"✅ **Auto Save ON: {folder}**\nএখন ভিডিও ফরোয়ার্ড করুন।")
-            return
+        # .m3u8 খোঁজা (সবচেয়ে কার্যকর)
+        m3u8_links = re.findall(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
+        if m3u8_links:
+            return CLEAN_PLAYER_URL + m3u8_links[0]
             
-        elif text == "❌ Stop Uploading":
-            if user_id in ADMIN_UPLOAD_MODE: del ADMIN_UPLOAD_MODE[user_id]
-            buttons = [[KeyboardButton("📤 Start Auto Upload"), KeyboardButton("📊 Database Stats")], [KeyboardButton("👥 User Mode")]]
-            await update.message.reply_text("⏹️ **বন্ধ করা হয়েছে।**", reply_markup=ReplyKeyboardMarkup(buttons, resize_keyboard=True))
-            return
+        # .mp4 খোঁজা
+        mp4_links = re.findall(r'(https?://[^\s"\'<>]+\.mp4)', html)
+        if mp4_links:
+            return mp4_links[0]
+            
+        return None
+    except: return None
 
-        elif text == "📊 Database Stats":
-            if not mongo_active:
-                await update.message.reply_text("❌ Database Not Connected!")
-                return
-            msg = "📊 **ডাটাবেস রিপোর্ট:**\n"
-            for f in ["BD HOT", "US HOT", "RI HOT"]:
-                count = videos_col.count_documents({"folder": f})
-                msg += f"🔹 {f}: {count} টি\n"
-            msg += f"\n👥 ইউজার: {users_col.count_documents({})}"
-            await update.message.reply_text(msg, parse_mode='Markdown')
-            return
-
-        elif text == "👥 User Mode":
-            menu_buttons = [
-                [KeyboardButton("🔥 BD HOT"), KeyboardButton("🇺🇸 US HOT")],
-                [KeyboardButton("🌶️ RI HOT"), KeyboardButton("📢 MY OFFICIAL CHANNEL")],
-                [KeyboardButton("➕ Add Me To Your Group ➕")]
-            ]
-            await update.message.reply_text("User Mode On", reply_markup=ReplyKeyboardMarkup(menu_buttons, resize_keyboard=True))
-            return
-
-    # --- সাধারণ বাটন ---
-    if text == "➕ Add Me To Your Group ➕":
-        url = f"https://t.me/{context.bot.username}?startgroup=true"
-        await update.message.reply_text("👇 গ্রুপে অ্যাড করুন:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Add", url=url)]]))
-        return
+# --- উন্নত স্ক্র্যাপার (সার্চ অপশনসহ) ---
+def scrape_videos(search_query=None, is_live=False):
+    target_list = LIVE_SITES if is_live else REGULAR_SITES
+    results = []
+    headers = {'User-Agent': 'Mozilla/5.0'}
     
-    if text == "📢 MY OFFICIAL CHANNEL":
-        await update.message.reply_text(f"Join: {CHANNEL_LINK}")
-        return
-
-    folder_map = {"🔥 BD HOT": "BD HOT", "🇺🇸 US HOT": "US HOT", "🌶️ RI HOT": "RI HOT"}
-    if text in folder_map:
-        if not await check_membership(user_id, context):
-            await update.message.reply_text("⚠️ **লক করা!** আগে জয়েন করুন।", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Join 🔞", url=CHANNEL_LINK)]]))
-            return
-        
-        folder = folder_map[text]
-        all_vids = get_videos(folder)
-        
-        if not all_vids:
-            await update.message.reply_text("❌ ভিডিও নেই।")
-            return
-        
-        # নো-রিপিট লজিক
-        user_history = history_col.find_one({"_id": user_id}) or {}
-        seen = user_history.get(folder, [])
-        
-        available = [v for v in all_vids if v not in seen]
-        if not available:
-            history_col.update_one({"_id": user_id}, {"$set": {folder: []}})
-            available = all_vids
-        
-        vid = random.choice(available)
+    for site in target_list:
         try:
-            await context.bot.send_video(chat_id=update.effective_chat.id, video=vid, caption=f"Join: {CHANNEL_USERNAME}")
-            history_col.update_one({"_id": user_id}, {"$push": {folder: vid}}, upsert=True)
-        except: await update.message.reply_text("Error loading video.")
+            res = requests.get(site, headers=headers, timeout=10)
+            soup = BeautifulSoup(res.text, 'html.parser')
+            for a_tag in soup.find_all('a'):
+                img = a_tag.find('img')
+                if img and a_tag.get('href'):
+                    title = (img.get('alt') or img.get('title') or "Hot Video").lower()
+                    video_page = a_tag.get('href')
+                    
+                    if not video_page.startswith("http"):
+                        video_page = "/".join(site.split("/")[:3]) + video_page
+                    
+                    # সার্চ কুয়েরি থাকলে ফিল্টার করবে
+                    if search_query and search_query.lower() not in title:
+                        continue
+                        
+                    thumb = img.get('src') or img.get('data-src')
+                    if thumb and not thumb.startswith("http"): thumb = "https:" + thumb
+                    
+                    results.append({'title': title.capitalize(), 'url': video_page, 'thumb': thumb})
+        except: continue
+    return results
+
+# --- কমান্ড হ্যান্ডলার ---
+
+@bot.message_handler(commands=['start'])
+def start(message):
+    sub, exp = is_subscribed(message.chat.id)
+    if sub:
+        bot.reply_to(message, f"✅ আপনি প্রিমিয়াম মেম্বার।\n⏳ মেয়াদ: {exp}\n\nভিডিও পেতে নাম লিখে সার্চ করুন অথবা 'video'/'live' লিখুন।")
+    else:
+        bot.reply_to(message, f"🚫 সাবস্ক্রিপশন নেই!\nকি (Key) কিনতে অ্যাডমিনকে মেসেজ দিন।\n👤 অ্যাডমিন: [Contact](tg://user?id={ADMIN_ID})\n\nরিডিম করতে: `/redeem YOUR_KEY`", parse_mode='Markdown')
+
+@bot.message_handler(commands=['gen'])
+def gen_key(message):
+    if message.from_user.id != ADMIN_ID: return
+    try:
+        _, days, slots = message.text.split()
+        key = f"VIP-{random.randint(100,999)}-{random.randint(100,999)}"
+        keys = load_db(KEYS_FILE)
+        keys[key] = {"days": int(days), "slots": int(slots)}
+        save_db(KEYS_FILE, keys)
+        bot.reply_to(message, f"🔑 Key: `{key}`\n⏳ Days: {days}\n👥 Slots: {slots}")
+    except: bot.reply_to(message, "ইউজ: `/gen দিন স্লট` (যেমন: /gen 30 5)")
+
+@bot.message_handler(commands=['redeem'])
+def redeem(message):
+    try:
+        key_input = message.text.split()[1]
+        keys = load_db(KEYS_FILE)
+        if key_input in keys:
+            users = load_db(USER_DATA_FILE)
+            exp = datetime.now() + timedelta(days=keys[key_input]['days'])
+            users[str(message.chat.id)] = exp.strftime("%Y-%m-%d %H:%M:%S")
+            save_db(USER_DATA_FILE, users)
+            
+            keys[key_input]['slots'] -= 1
+            if keys[key_input]['slots'] <= 0: del keys[key_input]
+            save_db(KEYS_FILE, keys)
+            bot.reply_to(message, "🎉 প্রিমিয়াম অ্যাক্টিভেট হয়েছে!")
+        else: bot.reply_to(message, "❌ ভুল বা মেয়াদী কি।")
+    except: bot.reply_to(message, "ইউজ: `/redeem KEY`")
+
+# --- মূল লজিক (সার্চ এবং ক্লিন ভিডিও) ---
+@bot.message_handler(func=lambda m: True)
+def handle_text(message):
+    uid = message.chat.id
+    sub, _ = is_subscribed(uid)
+    if not sub:
+        bot.send_message(uid, "🚫 আগে সাবস্ক্রিপশন নিন।")
         return
 
-# ব্রডকাস্ট হ্যান্ডলার
-async def broadcast_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS: return
-    msg = " ".join(context.args)
-    if not msg: 
-        await update.message.reply_text("Use: `/broadcast msg`")
+    query = message.text.lower()
+    is_live = "live" in query
+    
+    bot.send_message(uid, "🔍 ভিডিও খোঁজা হচ্ছে, দয়া করে অপেক্ষা করুন...")
+    
+    # ১. স্ক্র্যাপ করে সম্ভাব্য ভিডিওর লিস্ট নেওয়া
+    search_term = None if query in ["video", "live"] else query
+    videos = scrape_videos(search_query=search_term, is_live=is_live)
+    
+    if not videos:
+        bot.send_message(uid, "❌ দুঃখিত, আপনার সার্চ অনুযায়ী কোনো ভিডিও পাওয়া যায়নি।")
         return
-    users = users_col.find({})
-    await update.message.reply_text(f"Sending...")
-    for u in users:
-        try: await context.bot.send_message(u["_id"], msg)
-        except: pass
-    await update.message.reply_text("Done.")
 
-if __name__ == '__main__':
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.job_queue.run_repeating(send_auto_group_messages, interval=14400, first=10)
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("broadcast", broadcast_users))
-    app.add_handler(MessageHandler(filters.ALL, handle_message))
-    print("🔥 FINAL MONGO BOT STARTED 🔥")
-    app.run_polling()
+    random.shuffle(videos)
+    found_video = False
+
+    # ২. ভিডিওর লিস্ট থেকে ক্লিন লিংক চেক করা (সর্বোচ্চ ১০টি চেক করবে)
+    for v in videos[:10]:
+        clean_link = get_clean_stream(v['url'])
+        if clean_link:
+            caption = f"🎬 **{v['title']}**\n🛡️ Status: Ad-Free Player ✅\n\n▶️ [Watch Video Now]({clean_link})"
+            thumb = v['thumb'] if v['thumb'] else DEFAULT_THUMB
+            try:
+                bot.send_photo(uid, thumb, caption=caption, parse_mode='Markdown')
+                found_video = True
+                break # ভিডিও পাওয়া গেলে লুপ বন্ধ
+            except:
+                bot.send_message(uid, caption, parse_mode='Markdown')
+                found_video = True
+                break
+    
+    if not found_video:
+        bot.send_message(uid, "⚠️ এই মুহূর্তে কোনো ডাইরেক্ট প্লেয়ার লিংক পাওয়া যায়নি। অন্য কিছু লিখে সার্চ করুন।")
+
+print("Universal Search & Clean Player Bot Started...")
+bot.infinity_polling()
