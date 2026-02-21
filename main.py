@@ -1,187 +1,173 @@
-import telebot
-import requests
-from bs4 import BeautifulSoup
+import logging
 import random
+import re
+import requests
 import json
-import time
 import os
-import re 
+from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # ---------------------------------------------------------
 # ১. কনফিগারেশন
-BOT_TOKEN = "8195990732:AAGdnFVAbqlOiSIELOWHk7ArS1gm80AFDLY"
-ADMIN_ID = 1933498659  # আপনার Numerical ID দিন
+BOT_TOKEN = "8508230875:AAGEldhmFI56fkrc_O_op-epuf9gdTaezvg"
+ADMIN_ID = 1933498659
 
-# ২. ভিডিও সাইট লিস্ট
-REGULAR_SITES = [
-    "https://fry99.cc/latest-videos/",
-    "https://desibf.com/tag/desi-49/",
-    "https://www.desitales2.com/videos/tag/desi49/",
-    "https://www.desitales2.com/videos/category/bangla-sex/"
-]
+# ডাটাবেস ফাইল পাথ
+USERS_FILE = "users_db.json"
+KEYS_FILE = "keys_db.json"
+
+# ওয়েবসাইট লিস্ট
+REGULAR_SITES = ["https://fry99.cc/latest-videos/", "https://desibf.com/tag/desi-49/"]
 LIVE_SITES = ["https://desibf.com/live/", "https://www.desitales2.com/live-cams/"]
-
-# ৩. ক্লিন প্লেয়ার বেস ইউআরএল
 CLEAN_PLAYER_URL = "https://hlsjs.video-dev.org/demo/?src="
+
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 # ---------------------------------------------------------
 
-bot = telebot.TeleBot(BOT_TOKEN)
+# --- ডাটাবেস ফাংশন (JSON) ---
 
-# ফাইল ডাটাবেস
-USER_DATA_FILE = "users_db.json"
-KEYS_FILE = "keys_db.json"
-DEFAULT_THUMB = "https://cdn-icons-png.flaticon.com/512/12560/12560376.png"
-
-def load_db(file):
-    if not os.path.exists(file): return {}
+def load_data(filename):
+    if not os.path.exists(filename):
+        return {}
     try:
-        with open(file, "r") as f: return json.load(f)
-    except: return {}
+        with open(filename, 'r') as f:
+            return json.load(f)
+    except:
+        return {}
 
-def save_db(file, data):
-    with open(file, "w") as f: json.dump(data, f, indent=4)
+def save_data(filename, data):
+    with open(filename, 'w') as f:
+        json.dump(data, f, indent=4)
 
-def is_subscribed(user_id):
-    users = load_db(USER_DATA_FILE)
+async def is_subscribed(user_id):
+    users = load_data(USERS_FILE)
     uid = str(user_id)
     if uid in users:
         expiry = datetime.strptime(users[uid], "%Y-%m-%d %H:%M:%S")
-        if expiry > datetime.now(): return True, users[uid]
+        if expiry > datetime.now():
+            return True, expiry
     return False, None
 
-# --- অ্যাডভান্সড লিংক এক্সট্র্যাক্টর ---
+# --- ভিডিও স্ক্র্যাপার ও ক্লিনার ---
+
 def get_clean_stream(page_url):
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(page_url, headers=headers, timeout=10)
         html = response.text
-        
-        # .m3u8 খোঁজা (সবচেয়ে কার্যকর)
-        m3u8_links = re.findall(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
-        if m3u8_links:
-            return CLEAN_PLAYER_URL + m3u8_links[0]
-            
-        # .mp4 খোঁজা
-        mp4_links = re.findall(r'(https?://[^\s"\'<>]+\.mp4)', html)
-        if mp4_links:
-            return mp4_links[0]
-            
+        m3u8 = re.findall(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
+        if m3u8: return CLEAN_PLAYER_URL + m3u8[0]
+        mp4 = re.findall(r'(https?://[^\s"\'<>]+\.mp4)', html)
+        if mp4: return mp4[0]
         return None
     except: return None
 
-# --- উন্নত স্ক্র্যাপার (সার্চ অপশনসহ) ---
-def scrape_videos(search_query=None, is_live=False):
-    target_list = LIVE_SITES if is_live else REGULAR_SITES
+def scrape_videos(query=None):
     results = []
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    
-    for site in target_list:
+    for site in REGULAR_SITES:
         try:
-            res = requests.get(site, headers=headers, timeout=10)
+            res = requests.get(site, timeout=10)
             soup = BeautifulSoup(res.text, 'html.parser')
-            for a_tag in soup.find_all('a'):
-                img = a_tag.find('img')
-                if img and a_tag.get('href'):
-                    title = (img.get('alt') or img.get('title') or "Hot Video").lower()
-                    video_page = a_tag.get('href')
-                    
-                    if not video_page.startswith("http"):
-                        video_page = "/".join(site.split("/")[:3]) + video_page
-                    
-                    # সার্চ কুয়েরি থাকলে ফিল্টার করবে
-                    if search_query and search_query.lower() not in title:
-                        continue
-                        
+            for a in soup.find_all('a'):
+                img = a.find('img')
+                if img and a.get('href'):
+                    title = (img.get('alt') or "Video").lower()
+                    url = a.get('href')
+                    if not url.startswith("http"):
+                        url = "/".join(site.split("/")[:3]) + url
+                    if query and query.lower() not in title: continue
                     thumb = img.get('src') or img.get('data-src')
-                    if thumb and not thumb.startswith("http"): thumb = "https:" + thumb
-                    
-                    results.append({'title': title.capitalize(), 'url': video_page, 'thumb': thumb})
+                    results.append({'title': title.capitalize(), 'url': url, 'thumb': thumb})
         except: continue
     return results
 
-# --- কমান্ড হ্যান্ডলার ---
+# --- কমান্ড হ্যান্ডলারস ---
 
-@bot.message_handler(commands=['start'])
-def start(message):
-    sub, exp = is_subscribed(message.chat.id)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    sub, exp = await is_subscribed(update.effective_user.id)
     if sub:
-        bot.reply_to(message, f"✅ আপনি প্রিমিয়াম মেম্বার।\n⏳ মেয়াদ: {exp}\n\nভিডিও পেতে নাম লিখে সার্চ করুন অথবা 'video'/'live' লিখুন।")
+        await update.message.reply_text(f"✅ প্রিমিয়াম স্ট্যাটাস: সক্রিয়\n⏳ মেয়াদ: {exp.strftime('%Y-%m-%d')}\n\nভিডিওর নাম লিখে সার্চ দিন।")
     else:
-        bot.reply_to(message, f"🚫 সাবস্ক্রিপশন নেই!\nকি (Key) কিনতে অ্যাডমিনকে মেসেজ দিন।\n👤 অ্যাডমিন: [Contact](tg://user?id={ADMIN_ID})\n\nরিডিম করতে: `/redeem YOUR_KEY`", parse_mode='Markdown')
+        await update.message.reply_text(f"👋 স্বাগতম!\n\nভিডিও দেখতে কি (Key) প্রয়োজন।\n💰 কি কিনতে অ্যাডমিনকে মেসেজ দিন।\n👤 অ্যাডমিন আইডি: `{ADMIN_ID}`", parse_mode='Markdown')
 
-@bot.message_handler(commands=['gen'])
-def gen_key(message):
-    if message.from_user.id != ADMIN_ID: return
+async def gen_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
     try:
-        _, days, slots = message.text.split()
+        days = int(context.args[0])
+        slots = int(context.args[1])
         key = f"VIP-{random.randint(100,999)}-{random.randint(100,999)}"
-        keys = load_db(KEYS_FILE)
-        keys[key] = {"days": int(days), "slots": int(slots)}
-        save_db(KEYS_FILE, keys)
-        bot.reply_to(message, f"🔑 Key: `{key}`\n⏳ Days: {days}\n👥 Slots: {slots}")
-    except: bot.reply_to(message, "ইউজ: `/gen দিন স্লট` (যেমন: /gen 30 5)")
+        
+        keys = load_data(KEYS_FILE)
+        keys[key] = {"days": days, "slots": slots}
+        save_data(KEYS_FILE, keys)
+        
+        await update.message.reply_text(f"🔑 Key: `{key}`\n⏳ Days: {days}\n👥 Slots: {slots}", parse_mode='Markdown')
+    except:
+        await update.message.reply_text("সঠিক নিয়ম: `/gen দিন স্লট` (উদা: /gen 30 5)", parse_mode='Markdown')
 
-@bot.message_handler(commands=['redeem'])
-def redeem(message):
+async def redeem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        key_input = message.text.split()[1]
-        keys = load_db(KEYS_FILE)
+        key_input = context.args[0]
+        keys = load_data(KEYS_FILE)
+        
         if key_input in keys:
-            users = load_db(USER_DATA_FILE)
-            exp = datetime.now() + timedelta(days=keys[key_input]['days'])
-            users[str(message.chat.id)] = exp.strftime("%Y-%m-%d %H:%M:%S")
-            save_db(USER_DATA_FILE, users)
+            days = keys[key_input]['days']
+            expiry = datetime.now() + timedelta(days=days)
             
-            keys[key_input]['slots'] -= 1
-            if keys[key_input]['slots'] <= 0: del keys[key_input]
-            save_db(KEYS_FILE, keys)
-            bot.reply_to(message, "🎉 প্রিমিয়াম অ্যাক্টিভেট হয়েছে!")
-        else: bot.reply_to(message, "❌ ভুল বা মেয়াদী কি।")
-    except: bot.reply_to(message, "ইউজ: `/redeem KEY`")
+            users = load_data(USERS_FILE)
+            users[str(update.effective_user.id)] = expiry.strftime("%Y-%m-%d %H:%M:%S")
+            save_data(USERS_FILE, users)
+            
+            if keys[key_input]['slots'] > 1:
+                keys[key_input]['slots'] -= 1
+            else:
+                del keys[key_input]
+            save_data(KEYS_FILE, keys)
+            
+            await update.message.reply_text(f"🎉 সফল! {days} দিনের প্রিমিয়াম চালু হয়েছে।")
+        else:
+            await update.message.reply_text("❌ ভুল বা মেয়াদী কি।")
+    except:
+        await update.message.reply_text("সঠিক নিয়ম: `/redeem YOUR_KEY`", parse_mode='Markdown')
 
-# --- মূল লজিক (সার্চ এবং ক্লিন ভিডিও) ---
-@bot.message_handler(func=lambda m: True)
-def handle_text(message):
-    uid = message.chat.id
-    sub, _ = is_subscribed(uid)
+async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    sub, _ = await is_subscribed(uid)
     if not sub:
-        bot.send_message(uid, "🚫 আগে সাবস্ক্রিপশন নিন।")
+        await update.message.reply_text("🚫 সাবস্ক্রিপশন নেই। ভিডিও দেখতে কি কিনুন।")
         return
 
-    query = message.text.lower()
-    is_live = "live" in query
+    query = update.message.text
+    await update.message.reply_text("🔍 খোঁজা হচ্ছে, দয়া করে অপেক্ষা করুন...")
     
-    bot.send_message(uid, "🔍 ভিডিও খোঁজা হচ্ছে, দয়া করে অপেক্ষা করুন...")
-    
-    # ১. স্ক্র্যাপ করে সম্ভাব্য ভিডিওর লিস্ট নেওয়া
-    search_term = None if query in ["video", "live"] else query
-    videos = scrape_videos(search_query=search_term, is_live=is_live)
-    
+    videos = scrape_videos(query=query)
     if not videos:
-        bot.send_message(uid, "❌ দুঃখিত, আপনার সার্চ অনুযায়ী কোনো ভিডিও পাওয়া যায়নি।")
+        await update.message.reply_text("❌ কিছু পাওয়া যায়নি।")
         return
 
     random.shuffle(videos)
-    found_video = False
-
-    # ২. ভিডিওর লিস্ট থেকে ক্লিন লিংক চেক করা (সর্বোচ্চ ১০টি চেক করবে)
     for v in videos[:10]:
-        clean_link = get_clean_stream(v['url'])
-        if clean_link:
-            caption = f"🎬 **{v['title']}**\n🛡️ Status: Ad-Free Player ✅\n\n▶️ [Watch Video Now]({clean_link})"
-            thumb = v['thumb'] if v['thumb'] else DEFAULT_THUMB
+        clean = get_clean_stream(v['url'])
+        if clean:
+            caption = f"🎬 {v['title']}\n🛡️ Status: Ad-Free Ready ✅\n\n▶️ [Watch Now]({clean})"
             try:
-                bot.send_photo(uid, thumb, caption=caption, parse_mode='Markdown')
-                found_video = True
-                break # ভিডিও পাওয়া গেলে লুপ বন্ধ
+                await update.message.reply_photo(photo=v['thumb'] or "https://via.placeholder.com/400", caption=caption, parse_mode='Markdown')
+                return
             except:
-                bot.send_message(uid, caption, parse_mode='Markdown')
-                found_video = True
-                break
-    
-    if not found_video:
-        bot.send_message(uid, "⚠️ এই মুহূর্তে কোনো ডাইরেক্ট প্লেয়ার লিংক পাওয়া যায়নি। অন্য কিছু লিখে সার্চ করুন।")
+                await update.message.reply_text(caption, parse_mode='Markdown')
+                return
+    await update.message.reply_text("⚠️ ক্লিন লিংক পাওয়া যায়নি।")
 
-print("Universal Search & Clean Player Bot Started...")
-bot.infinity_polling()
+# --- মেইন রানার ---
+if __name__ == '__main__':
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("gen", gen_key))
+    app.add_handler(CommandHandler("redeem", redeem))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), search_handler))
+    
+    print("Bot is running with Local Data...")
+    app.run_polling()
