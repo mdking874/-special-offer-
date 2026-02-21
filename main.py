@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 # ---------------------------------------------------------
 # ১. কনফিগারেশন
 BOT_TOKEN = "8195990732:AAGdnFVAbqlOiSIELOWHk7ArS1gm80AFDLY"
-ADMIN_ID = 123456789  # আপনার Numerical ID দিন
+ADMIN_ID = 1933498659  # আপনার Numerical ID দিন
 
 # ২. ভিডিও সাইট লিস্ট
 REGULAR_SITES = [
